@@ -23,7 +23,7 @@ const User = mongoose.model('User', UserSchema);
 const ProductSchema = new mongoose.Schema({
   name: { type: String, required: true },
   price: { type: Number, required: true },
-  accountData: { type: String, required: true } // định dạng: username:password
+  accountData: { type: String, required: true }
 });
 const Product = mongoose.model('Product', ProductSchema);
 
@@ -32,8 +32,9 @@ const OrderSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product', default: null },
   amount: { type: Number, required: true },
-  status: { type: String, default: 'pending' }, // pending, completed, failed
-  type: { type: String, default: 'purchase' }, // purchase, deposit
+  status: { type: String, default: 'pending' },
+  type: { type: String, default: 'purchase' },
+  payosLink: { type: String, default: '' },
   createdAt: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', OrderSchema);
@@ -45,17 +46,6 @@ const PurchaseSchema = new mongoose.Schema({
   purchasedAt: { type: Date, default: Date.now }
 });
 const Purchase = mongoose.model('Purchase', PurchaseSchema);
-
-// ==================== MIDDLEWARE AUTH ====================
-const authMiddleware = async (req, res, next) => {
-  const token = req.headers['authorization'];
-  if (!token) return res.status(401).json({ error: 'No token' });
-  // token đơn giản là userId (có thể dùng JWT thực tế)
-  const user = await User.findById(token);
-  if (!user) return res.status(401).json({ error: 'Invalid token' });
-  req.user = user;
-  next();
-};
 
 // ==================== API AUTH ====================
 app.post('/api/register', async (req, res) => {
@@ -82,6 +72,16 @@ app.post('/api/login', async (req, res) => {
   }
 });
 
+app.get('/api/user/:userId/balance', async (req, res) => {
+  try {
+    const user = await User.findById(req.params.userId);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    res.json({ balance: user.balance });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ==================== API PRODUCTS ====================
 app.get('/api/products', async (req, res) => {
   try {
@@ -92,7 +92,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// ==================== API TẠO ĐƠN HÀNG (MUA HÀNG) ====================
+// ==================== API TẠO ĐƠN MUA HÀNG ====================
 app.post('/api/create-order', async (req, res) => {
   try {
     const { userId, productId } = req.body;
@@ -101,7 +101,7 @@ app.post('/api/create-order', async (req, res) => {
     const product = await Product.findById(productId);
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
-    const orderCode = `ORDER_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const orderCode = `ORD${Date.now()}${Math.floor(Math.random() * 10000)}`;
     const order = new Order({
       orderCode,
       userId,
@@ -111,14 +111,12 @@ app.post('/api/create-order', async (req, res) => {
     });
     await order.save();
 
-    // Gọi API PayOS tạo link thanh toán
     const payosPayload = {
-      orderCode: parseInt(orderCode.replace(/\D/g, '').slice(0, 10)),
+      orderCode: parseInt(Date.now().toString().slice(-10) + Math.floor(Math.random() * 1000)),
       amount: product.price,
       description: `Mua ${product.name}`,
       returnUrl: `${process.env.FRONTEND_URL}/success.html`,
-      cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`,
-      signature: ''
+      cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
     };
 
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
@@ -134,7 +132,7 @@ app.post('/api/create-order', async (req, res) => {
       await order.save();
       res.json({ checkoutUrl: payosRes.data.data.checkoutUrl, orderCode: order.orderCode });
     } else {
-      throw new Error('PayOS error');
+      throw new Error('PayOS error: ' + JSON.stringify(payosRes.data));
     }
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -147,7 +145,7 @@ app.post('/api/deposit', async (req, res) => {
     const { userId, amount } = req.body;
     if (!userId || !amount || amount <= 0) return res.status(400).json({ error: 'Invalid data' });
 
-    const orderCode = `DEPOSIT_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
+    const orderCode = `DEP${Date.now()}${Math.floor(Math.random() * 10000)}`;
     const order = new Order({
       orderCode,
       userId,
@@ -158,7 +156,7 @@ app.post('/api/deposit', async (req, res) => {
     await order.save();
 
     const payosPayload = {
-      orderCode: parseInt(orderCode.replace(/\D/g, '').slice(0, 10)),
+      orderCode: parseInt(Date.now().toString().slice(-10) + Math.floor(Math.random() * 1000)),
       amount: amount,
       description: `Nap tien ${amount} VND`,
       returnUrl: `${process.env.FRONTEND_URL}/success.html`,
@@ -191,38 +189,36 @@ app.post('/api/webhook', async (req, res) => {
     const { orderCode, status, amount, transactionId } = req.body;
     
     if (status === 'PAID') {
-      const order = await Order.findOne({ orderCode: { $regex: orderCode, $options: 'i' } });
-      if (!order) return res.status(404).json({ error: 'Order not found' });
+      let foundOrder = null;
+      foundOrder = await Order.findOne({ orderCode: { $regex: `.*${orderCode}.*` } });
+      if (!foundOrder) {
+        foundOrder = await Order.findOne({ 'payosLink': { $regex: `.*${orderCode}.*` } });
+      }
       
-      if (order.status === 'pending') {
-        order.status = 'completed';
-        await order.save();
+      if (foundOrder && foundOrder.status === 'pending') {
+        foundOrder.status = 'completed';
+        await foundOrder.save();
 
-        if (order.type === 'purchase') {
-          // Gửi tài khoản tự động
-          const product = await Product.findById(order.productId);
-          const user = await User.findById(order.userId);
+        if (foundOrder.type === 'purchase') {
+          const product = await Product.findById(foundOrder.productId);
+          const user = await User.findById(foundOrder.userId);
           
           if (product && user) {
-            // Lưu vào lịch sử mua
             const purchase = new Purchase({
               userId: user._id,
               productId: product._id,
               accountData: product.accountData
             });
             await purchase.save();
-            
-            // Có thể gửi email hoặc notification ở đây
-            console.log(`[AUTO] Đã gửi tài khoản ${product.accountData} cho user ${user.username}`);
+            console.log(`[AUTO] Sent account ${product.accountData} to user ${user.username}`);
           }
         } 
-        else if (order.type === 'deposit') {
-          // Cộng tiền vào balance
-          const user = await User.findById(order.userId);
+        else if (foundOrder.type === 'deposit') {
+          const user = await User.findById(foundOrder.userId);
           if (user) {
-            user.balance += order.amount;
+            user.balance += foundOrder.amount;
             await user.save();
-            console.log(`[AUTO] Đã nạp ${order.amount} cho user ${user.username}, balance mới: ${user.balance}`);
+            console.log(`[AUTO] Added ${foundOrder.amount} to user ${user.username}, new balance: ${user.balance}`);
           }
         }
       }
@@ -235,7 +231,7 @@ app.post('/api/webhook', async (req, res) => {
   }
 });
 
-// ==================== API LẤY ĐƠN HÀNG CỦA USER ====================
+// ==================== API LẤY ĐƠN HÀNG ====================
 app.get('/api/my-orders/:userId', async (req, res) => {
   try {
     const orders = await Order.find({ userId: req.params.userId, status: 'completed' })
@@ -247,7 +243,6 @@ app.get('/api/my-orders/:userId', async (req, res) => {
   }
 });
 
-// ==================== API LẤY TÀI KHOẢN ĐÃ MUA ====================
 app.get('/api/my-purchases/:userId', async (req, res) => {
   try {
     const purchases = await Purchase.find({ userId: req.params.userId })
@@ -302,6 +297,16 @@ app.delete('/api/admin/products/:productId', async (req, res) => {
   }
 });
 
+app.put('/api/admin/products/:productId', async (req, res) => {
+  try {
+    const { name, price, accountData } = req.body;
+    const product = await Product.findByIdAndUpdate(req.params.productId, { name, price, accountData }, { new: true });
+    res.json(product);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.get('/api/admin/users', async (req, res) => {
   try {
     const users = await User.find().select('-password');
@@ -321,7 +326,18 @@ app.post('/api/admin/users/:userId/balance', async (req, res) => {
   }
 });
 
-// ==================== KHỞI TẠO DỮ LIỆU MẪU (CHẠY 1 LẦN) ====================
+app.delete('/api/admin/users/:userId', async (req, res) => {
+  try {
+    await User.findByIdAndDelete(req.params.userId);
+    await Order.deleteMany({ userId: req.params.userId });
+    await Purchase.deleteMany({ userId: req.params.userId });
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ==================== KHỞI TẠO DỮ LIỆU MẪU ====================
 const initData = async () => {
   const productCount = await Product.countDocuments();
   if (productCount === 0) {
@@ -330,11 +346,14 @@ const initData = async () => {
       { name: 'Pro VIP 3 tháng', price: 250000, accountData: 'vipuser3:pass456' },
       { name: 'Pro VIP 1 năm', price: 800000, accountData: 'vipuser12:pass789' }
     ]);
-    console.log('Đã tạo sản phẩm mẫu');
+    console.log('Sample products created');
   }
 };
 initData();
 
-// ==================== START SERVER ====================
+app.get('/api/debug', (req, res) => {
+  res.json({ message: 'Backend is running', timestamp: Date.now() });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
