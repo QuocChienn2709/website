@@ -1,58 +1,39 @@
-// ==================== backend/server.js (SỬA KẾT NỐI MONGODB - BỎ SRV) ====================
+// ==================== backend/server.js (FULL CODE CỐ ĐỊNH) ====================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const crypto = require('crypto');
 const axios = require('axios');
+const path = require('path');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-// ==================== FIX: SỬ DỤNG STANDARD CONNECTION STRING (KHÔNG SRV) ====================
-// Nếu MONGO_URL có dạng mongodb+srv:// -> tự động chuyển sang standard TCP
-const fixMongoUrl = (url) => {
-  if (url && url.includes('mongodb+srv://')) {
-    // Chuyển đổi từ SRV sang standard connection string
-    const withoutSrv = url.replace('mongodb+srv://', 'mongodb://');
-    // Thêm option directConnection=true để bỏ qua DNS SRV
-    const separator = withoutSrv.includes('?') ? '&' : '?';
-    return `${withoutSrv}${separator}directConnection=true&tls=true`;
-  }
-  return url;
-};
+// ==================== FIX: THÊM SERVE STATIC FILES CHO TEST ====================
+// Nếu muốn test trực tiếp trên Render (không cần Vercel)
+app.use(express.static(path.join(__dirname, 'public')));
 
-const mongoUrl = process.env.MONGO_URL;
-if (!mongoUrl) {
-  console.error('ERROR: MONGO_URL is not defined');
-  process.exit(1);
-}
-
-const fixedUrl = fixMongoUrl(mongoUrl);
-console.log('Using MongoDB connection (fixed if needed)');
-
+// ==================== KẾT NỐI MONGODB ====================
+const mongoUrl = process.env.MONGO_URL || 'mongodb://mongo:KQfRIDylmJWmdOplZykjxNtCLLyMCVsb@thomas.proxy.rlwy.net:49230';
 const mongoOptions = {
   useNewUrlParser: true,
   useUnifiedTopology: true,
   serverSelectionTimeoutMS: 10000,
   socketTimeoutMS: 45000,
-  connectTimeoutMS: 10000,
-  family: 4 // Force IPv4
+  family: 4
 };
 
-// KẾT NỐI MONGODB
 const connectDB = async () => {
   try {
     console.log('Connecting to MongoDB...');
-    await mongoose.connect(fixedUrl, mongoOptions);
+    await mongoose.connect(mongoUrl, mongoOptions);
     console.log('MongoDB connected successfully');
   } catch (err) {
     console.error('MongoDB connection error:', err.message);
-    console.log('Retrying in 5 seconds...');
     setTimeout(connectDB, 5000);
   }
 };
-
 connectDB();
 
 // ==================== SCHEMAS ====================
@@ -91,13 +72,7 @@ const PurchaseSchema = new mongoose.Schema({
 });
 const Purchase = mongoose.model('Purchase', PurchaseSchema);
 
-// ==================== HÀM TẠO CHECKSUM ====================
-function createPayOSChecksum(data, apiKey) {
-  const sortedKeys = Object.keys(data).sort();
-  const signString = sortedKeys.map(key => `${key}=${data[key]}`).join('&');
-  return crypto.createHmac('sha256', apiKey).update(signString).digest('hex');
-}
-
+// ==================== HÀM CHECKSUM ====================
 function verifyPayOSWebhook(body, signature, checksumKey) {
   const sortedKeys = Object.keys(body).sort();
   const signString = sortedKeys.map(key => `${key}=${body[key]}`).join('&');
@@ -176,8 +151,8 @@ app.post('/api/create-order', async (req, res) => {
       orderCode: payosOrderCode,
       amount: product.price,
       description: `Mua ${product.name.substring(0, 25)}`,
-      returnUrl: `${process.env.FRONTEND_URL}/success.html`,
-      cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
+      returnUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/success.html`,
+      cancelUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/cancel.html`
     };
 
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
@@ -197,6 +172,7 @@ app.post('/api/create-order', async (req, res) => {
       throw new Error('PayOS error: ' + JSON.stringify(payosRes.data));
     }
   } catch (err) {
+    console.error('Create order error:', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -204,8 +180,12 @@ app.post('/api/create-order', async (req, res) => {
 // ==================== API NẠP TIỀN ====================
 app.post('/api/deposit', async (req, res) => {
   try {
+    console.log('=== DEPOSIT REQUEST ===');
     const { userId, amount } = req.body;
-    if (!userId || !amount || amount <= 0) return res.status(400).json({ error: 'Invalid data' });
+    
+    if (!userId || !amount || amount <= 0) {
+      return res.status(400).json({ error: 'Invalid data' });
+    }
 
     const orderCodeStr = `DEP${Date.now()}${Math.floor(Math.random() * 10000)}`;
     const payosOrderCode = parseInt(Date.now().toString().slice(-9) + Math.floor(Math.random() * 1000));
@@ -224,10 +204,11 @@ app.post('/api/deposit', async (req, res) => {
       orderCode: payosOrderCode,
       amount: amount,
       description: `Nap tien ${amount} VND`,
-      returnUrl: `${process.env.FRONTEND_URL}/success.html`,
-      cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
+      returnUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/success.html`,
+      cancelUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/cancel.html`
     };
 
+    console.log('Calling PayOS API...');
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
       headers: {
         'x-client-id': process.env.PAYOS_CLIENT_ID,
@@ -237,19 +218,22 @@ app.post('/api/deposit', async (req, res) => {
       }
     });
 
+    console.log('PayOS response:', payosRes.data);
+
     if (payosRes.data.code === '00') {
       order.payosLink = payosRes.data.data.checkoutUrl;
       await order.save();
       res.json({ checkoutUrl: payosRes.data.data.checkoutUrl, orderCode: order.orderCode });
     } else {
-      throw new Error('PayOS error');
+      throw new Error('PayOS error: ' + JSON.stringify(payosRes.data));
     }
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Deposit error:', err.response?.data || err.message);
+    res.status(500).json({ error: err.response?.data?.message || err.message });
   }
 });
 
-// ==================== WEBHOOK PAYOS ====================
+// ==================== WEBHOOK ====================
 app.post('/api/webhook', async (req, res) => {
   try {
     const signature = req.headers['x-signature'] || req.headers['x-checksum'];
@@ -275,7 +259,6 @@ app.post('/api/webhook', async (req, res) => {
         if (foundOrder.type === 'purchase') {
           const product = await Product.findById(foundOrder.productId);
           const user = await User.findById(foundOrder.userId);
-          
           if (product && user) {
             const purchase = new Purchase({
               userId: user._id,
@@ -285,18 +268,16 @@ app.post('/api/webhook', async (req, res) => {
             await purchase.save();
             console.log(`[AUTO] Sent account ${product.accountData} to user ${user.username}`);
           }
-        } 
-        else if (foundOrder.type === 'deposit') {
+        } else if (foundOrder.type === 'deposit') {
           const user = await User.findById(foundOrder.userId);
           if (user) {
             user.balance += foundOrder.amount;
             await user.save();
-            console.log(`[AUTO] Added ${foundOrder.amount} to user ${user.username}, new balance: ${user.balance}`);
+            console.log(`[AUTO] Added ${foundOrder.amount} to user ${user.username}`);
           }
         }
       }
     }
-    
     res.json({ success: true });
   } catch (err) {
     console.error('Webhook error:', err);
@@ -304,12 +285,10 @@ app.post('/api/webhook', async (req, res) => {
   }
 });
 
-// ==================== API LẤY ĐƠN HÀNG ====================
+// ==================== API LẤY ORDER ====================
 app.get('/api/my-orders/:userId', async (req, res) => {
   try {
-    const orders = await Order.find({ userId: req.params.userId, status: 'completed' })
-      .populate('productId')
-      .sort({ createdAt: -1 });
+    const orders = await Order.find({ userId: req.params.userId, status: 'completed' }).populate('productId').sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -318,9 +297,7 @@ app.get('/api/my-orders/:userId', async (req, res) => {
 
 app.get('/api/my-purchases/:userId', async (req, res) => {
   try {
-    const purchases = await Purchase.find({ userId: req.params.userId })
-      .populate('productId')
-      .sort({ purchasedAt: -1 });
+    const purchases = await Purchase.find({ userId: req.params.userId }).populate('productId').sort({ purchasedAt: -1 });
     res.json(purchases);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -330,10 +307,7 @@ app.get('/api/my-purchases/:userId', async (req, res) => {
 // ==================== API ADMIN ====================
 app.get('/api/admin/orders', async (req, res) => {
   try {
-    const orders = await Order.find()
-      .populate('userId', 'username')
-      .populate('productId', 'name')
-      .sort({ createdAt: -1 });
+    const orders = await Order.find().populate('userId', 'username').populate('productId', 'name').sort({ createdAt: -1 });
     res.json(orders);
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -410,7 +384,7 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
   }
 });
 
-// ==================== KHỞI TẠO DỮ LIỆU MẪU ====================
+// ==================== INIT DATA ====================
 const initData = async () => {
   try {
     const productCount = await Product.countDocuments();
@@ -423,17 +397,37 @@ const initData = async () => {
       console.log('Sample products created');
     }
   } catch (err) {
-    console.error('Init data error:', err.message);
+    console.error('Init error:', err.message);
   }
 };
 
 mongoose.connection.once('open', () => {
-  console.log('MongoDB ready, initializing data...');
+  console.log('MongoDB ready, initializing...');
   initData();
 });
 
+// ==================== DEBUG ====================
 app.get('/api/debug', (req, res) => {
-  res.json({ message: 'Backend is running', timestamp: Date.now() });
+  res.json({ message: 'Backend OK', timestamp: Date.now(), mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
+});
+
+// ==================== FALLBACK CHO FRONTEND ====================
+app.get('/', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head><title>Shop Pro API</title></head>
+    <body>
+      <h1>Backend is running!</h1>
+      <p>API endpoints:</p>
+      <ul>
+        <li><a href="/api/products">/api/products</a></li>
+        <li><a href="/api/debug">/api/debug</a></li>
+      </ul>
+      <p>Frontend: <a href="https://websitepro-one.vercel.app">https://websitepro-one.vercel.app</a></p>
+    </body>
+    </html>
+  `);
 });
 
 const PORT = process.env.PORT || 3000;
