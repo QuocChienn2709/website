@@ -1,4 +1,4 @@
-// ==================== server.js (có xử lý Checksum) ====================
+// ==================== backend/server.js (SỬA LỖI KẾT NỐI MONGODB) ====================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -9,10 +9,37 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ==================== KẾT NỐI MONGODB ====================
-mongoose.connect(process.env.MONGO_URL, { useNewUrlParser: true, useUnifiedTopology: true });
+// ==================== FIX: THÊM OPTIONS CHO MONGODB CONNECTION ====================
+const mongoOptions = {
+  useNewUrlParser: true,
+  useUnifiedTopology: true,
+  serverSelectionTimeoutMS: 5000,
+  socketTimeoutMS: 45000,
+  family: 4 // Force IPv4, tránh lỗi DNS
+};
 
-// ==================== SCHEMAS ====================
+// KẾT NỐI MONGODB VỚI LOG CHI TIẾT
+const connectDB = async () => {
+  try {
+    const mongoUrl = process.env.MONGO_URL;
+    if (!mongoUrl) {
+      console.error('ERROR: MONGO_URL is not defined in environment variables');
+      process.exit(1);
+    }
+    console.log('Connecting to MongoDB...');
+    await mongoose.connect(mongoUrl, mongoOptions);
+    console.log('MongoDB connected successfully');
+  } catch (err) {
+    console.error('MongoDB connection error:', err.message);
+    console.error('Please check your MONGO_URL in Render environment variables');
+    console.error('Expected format: mongodb+srv://username:password@cluster.mongodb.net/database_name');
+    process.exit(1);
+  }
+};
+
+connectDB();
+
+// ==================== SCHEMAS (giữ nguyên) ====================
 const UserSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -48,7 +75,7 @@ const PurchaseSchema = new mongoose.Schema({
 });
 const Purchase = mongoose.model('Purchase', PurchaseSchema);
 
-// ==================== HÀM TẠO CHECKSUM PAYOS ====================
+// ==================== HÀM TẠO CHECKSUM ====================
 function createPayOSChecksum(data, apiKey) {
   const sortedKeys = Object.keys(data).sort();
   const signString = sortedKeys.map(key => `${key}=${data[key]}`).join('&');
@@ -107,7 +134,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// ==================== API TẠO ĐƠN MUA HÀNG (CÓ CHECKSUM) ====================
+// ==================== API TẠO ĐƠN MUA HÀNG ====================
 app.post('/api/create-order', async (req, res) => {
   try {
     const { userId, productId } = req.body;
@@ -137,9 +164,6 @@ app.post('/api/create-order', async (req, res) => {
       cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
     };
 
-    // Tạo checksum cho request gửi PayOS
-    const checksum = createPayOSChecksum(payosPayload, process.env.PAYOS_CHECKSUM_KEY);
-    
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
       headers: {
         'x-client-id': process.env.PAYOS_CLIENT_ID,
@@ -161,7 +185,7 @@ app.post('/api/create-order', async (req, res) => {
   }
 });
 
-// ==================== API NẠP TIỀN (CÓ CHECKSUM) ====================
+// ==================== API NẠP TIỀN ====================
 app.post('/api/deposit', async (req, res) => {
   try {
     const { userId, amount } = req.body;
@@ -188,8 +212,6 @@ app.post('/api/deposit', async (req, res) => {
       cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
     };
 
-    const checksum = createPayOSChecksum(payosPayload, process.env.PAYOS_CHECKSUM_KEY);
-    
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
       headers: {
         'x-client-id': process.env.PAYOS_CLIENT_ID,
@@ -211,19 +233,18 @@ app.post('/api/deposit', async (req, res) => {
   }
 });
 
-// ==================== WEBHOOK PAYOS (CÓ XÁC MINH CHECKSUM) ====================
+// ==================== WEBHOOK PAYOS ====================
 app.post('/api/webhook', async (req, res) => {
   try {
     const signature = req.headers['x-signature'] || req.headers['x-checksum'];
     const webhookBody = req.body;
     
-    // Xác minh checksum
     if (!verifyPayOSWebhook(webhookBody, signature, process.env.PAYOS_CHECKSUM_KEY)) {
       console.error('Invalid webhook signature');
       return res.status(400).json({ error: 'Invalid signature' });
     }
     
-    const { orderCode, status, amount, transactionId } = webhookBody;
+    const { orderCode, status, amount } = webhookBody;
     
     if (status === 'PAID') {
       let foundOrder = await Order.findOne({ payosOrderCode: orderCode });
@@ -375,17 +396,26 @@ app.delete('/api/admin/users/:userId', async (req, res) => {
 
 // ==================== KHỞI TẠO DỮ LIỆU MẪU ====================
 const initData = async () => {
-  const productCount = await Product.countDocuments();
-  if (productCount === 0) {
-    await Product.create([
-      { name: 'Pro VIP 1 tháng', price: 100000, accountData: 'vipuser1:pass123' },
-      { name: 'Pro VIP 3 tháng', price: 250000, accountData: 'vipuser3:pass456' },
-      { name: 'Pro VIP 1 năm', price: 800000, accountData: 'vipuser12:pass789' }
-    ]);
-    console.log('Sample products created');
+  try {
+    const productCount = await Product.countDocuments();
+    if (productCount === 0) {
+      await Product.create([
+        { name: 'Pro VIP 1 tháng', price: 100000, accountData: 'vipuser1:pass123' },
+        { name: 'Pro VIP 3 tháng', price: 250000, accountData: 'vipuser3:pass456' },
+        { name: 'Pro VIP 1 năm', price: 800000, accountData: 'vipuser12:pass789' }
+      ]);
+      console.log('Sample products created');
+    }
+  } catch (err) {
+    console.error('Init data error:', err.message);
   }
 };
-initData();
+
+// Đợi kết nối MongoDB xong mới init data
+mongoose.connection.once('open', () => {
+  console.log('MongoDB ready, initializing data...');
+  initData();
+});
 
 app.get('/api/debug', (req, res) => {
   res.json({ message: 'Backend is running with PayOS Checksum', timestamp: Date.now() });
