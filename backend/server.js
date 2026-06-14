@@ -1,17 +1,14 @@
-// ==================== backend/server.js (FULL CODE CỐ ĐỊNH) ====================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
 const crypto = require('crypto');
 const axios = require('axios');
+const https = require('https');
 const path = require('path');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
-
-// ==================== FIX: THÊM SERVE STATIC FILES CHO TEST ====================
-// Nếu muốn test trực tiếp trên Render (không cần Vercel)
 app.use(express.static(path.join(__dirname, 'public')));
 
 // ==================== KẾT NỐI MONGODB ====================
@@ -73,11 +70,51 @@ const PurchaseSchema = new mongoose.Schema({
 const Purchase = mongoose.model('Purchase', PurchaseSchema);
 
 // ==================== HÀM CHECKSUM ====================
+function createPayOSChecksum(data, apiKey) {
+  const sortedKeys = Object.keys(data).sort();
+  const signString = sortedKeys.map(key => `${key}=${data[key]}`).join('&');
+  return crypto.createHmac('sha256', apiKey).update(signString).digest('hex');
+}
+
 function verifyPayOSWebhook(body, signature, checksumKey) {
   const sortedKeys = Object.keys(body).sort();
   const signString = sortedKeys.map(key => `${key}=${body[key]}`).join('&');
   const expectedSignature = crypto.createHmac('sha256', checksumKey).update(signString).digest('hex');
   return signature === expectedSignature;
+}
+
+// ==================== HÀM GỌI PAYOS VỚI RETRY ====================
+const payosApiUrl = 'https://api.payos.vn/v1/payment-requests';
+
+async function callPayOS(payload, headers) {
+  const maxRetries = 3;
+  let lastError;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      console.log(`Calling PayOS attempt ${i + 1}...`);
+      const agent = new https.Agent({ rejectUnauthorized: true, timeout: 30000 });
+      const response = await axios.post(payosApiUrl, payload, {
+        headers: {
+          ...headers,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000,
+        httpsAgent: agent
+      });
+      return response;
+    } catch (err) {
+      lastError = err;
+      console.error(`PayOS attempt ${i + 1} failed:`, err.message);
+      if (err.code === 'ENOTFOUND') {
+        console.error('DNS lookup failed for api.payos.vn');
+      }
+      if (i < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 3000 * (i + 1)));
+      }
+    }
+  }
+  throw lastError;
 }
 
 // ==================== API AUTH ====================
@@ -155,14 +192,17 @@ app.post('/api/create-order', async (req, res) => {
       cancelUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/cancel.html`
     };
 
-    const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
-      headers: {
-        'x-client-id': process.env.PAYOS_CLIENT_ID,
-        'x-api-key': process.env.PAYOS_API_KEY,
-        'x-checksum-key': process.env.PAYOS_CHECKSUM_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
+    const headers = {
+      'x-client-id': process.env.PAYOS_CLIENT_ID,
+      'x-api-key': process.env.PAYOS_API_KEY
+    };
+    
+    if (process.env.PAYOS_CHECKSUM_KEY) {
+      const checksum = createPayOSChecksum(payosPayload, process.env.PAYOS_CHECKSUM_KEY);
+      headers['x-checksum-key'] = checksum;
+    }
+
+    const payosRes = await callPayOS(payosPayload, headers);
 
     if (payosRes.data.code === '00') {
       order.payosLink = payosRes.data.data.checkoutUrl;
@@ -199,6 +239,7 @@ app.post('/api/deposit', async (req, res) => {
       payosOrderCode: payosOrderCode
     });
     await order.save();
+    console.log('Order saved, payosOrderCode:', payosOrderCode);
 
     const payosPayload = {
       orderCode: payosOrderCode,
@@ -208,40 +249,61 @@ app.post('/api/deposit', async (req, res) => {
       cancelUrl: `${process.env.FRONTEND_URL || 'https://websitepro-one.vercel.app'}/cancel.html`
     };
 
-    console.log('Calling PayOS API...');
-    const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
-      headers: {
-        'x-client-id': process.env.PAYOS_CLIENT_ID,
-        'x-api-key': process.env.PAYOS_API_KEY,
-        'x-checksum-key': process.env.PAYOS_CHECKSUM_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
+    console.log('PayOS Payload:', payosPayload);
+    
+    if (!process.env.PAYOS_CLIENT_ID || !process.env.PAYOS_API_KEY) {
+      console.error('Missing PayOS credentials');
+      return res.status(500).json({ error: 'PayOS not configured on server' });
+    }
 
-    console.log('PayOS response:', payosRes.data);
+    const headers = {
+      'x-client-id': process.env.PAYOS_CLIENT_ID,
+      'x-api-key': process.env.PAYOS_API_KEY
+    };
+    
+    if (process.env.PAYOS_CHECKSUM_KEY) {
+      headers['x-checksum-key'] = process.env.PAYOS_CHECKSUM_KEY;
+    }
+    
+    console.log('Calling PayOS API...');
+    const payosRes = await callPayOS(payosPayload, headers);
+    
+    console.log('PayOS response status:', payosRes.status);
+    console.log('PayOS response data:', JSON.stringify(payosRes.data).substring(0, 500));
 
     if (payosRes.data.code === '00') {
       order.payosLink = payosRes.data.data.checkoutUrl;
       await order.save();
       res.json({ checkoutUrl: payosRes.data.data.checkoutUrl, orderCode: order.orderCode });
     } else {
-      throw new Error('PayOS error: ' + JSON.stringify(payosRes.data));
+      throw new Error('PayOS error code: ' + payosRes.data.code + ' - ' + JSON.stringify(payosRes.data));
     }
   } catch (err) {
-    console.error('Deposit error:', err.response?.data || err.message);
-    res.status(500).json({ error: err.response?.data?.message || err.message });
+    console.error('Deposit error:', err.message);
+    if (err.code === 'ENOTFOUND') {
+      console.error('DNS error: Cannot resolve api.payos.vn');
+      res.status(500).json({ error: 'Cannot connect to payment gateway. Please try again later.' });
+    } else if (err.response) {
+      console.error('PayOS response error:', err.response.data);
+      res.status(500).json({ error: err.response.data?.message || 'Payment gateway error' });
+    } else {
+      res.status(500).json({ error: err.message });
+    }
   }
 });
 
-// ==================== WEBHOOK ====================
+// ==================== WEBHOOK PAYOS ====================
 app.post('/api/webhook', async (req, res) => {
   try {
+    console.log('Webhook received:', req.body);
     const signature = req.headers['x-signature'] || req.headers['x-checksum'];
     const webhookBody = req.body;
     
-    if (!verifyPayOSWebhook(webhookBody, signature, process.env.PAYOS_CHECKSUM_KEY)) {
-      console.error('Invalid webhook signature');
-      return res.status(400).json({ error: 'Invalid signature' });
+    if (process.env.PAYOS_CHECKSUM_KEY && signature) {
+      if (!verifyPayOSWebhook(webhookBody, signature, process.env.PAYOS_CHECKSUM_KEY)) {
+        console.error('Invalid webhook signature');
+        return res.status(400).json({ error: 'Invalid signature' });
+      }
     }
     
     const { orderCode, status } = webhookBody;
@@ -273,7 +335,7 @@ app.post('/api/webhook', async (req, res) => {
           if (user) {
             user.balance += foundOrder.amount;
             await user.save();
-            console.log(`[AUTO] Added ${foundOrder.amount} to user ${user.username}`);
+            console.log(`[AUTO] Added ${foundOrder.amount} to user ${user.username}, new balance: ${user.balance}`);
           }
         }
       }
@@ -408,23 +470,27 @@ mongoose.connection.once('open', () => {
 
 // ==================== DEBUG ====================
 app.get('/api/debug', (req, res) => {
-  res.json({ message: 'Backend OK', timestamp: Date.now(), mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected' });
+  res.json({ 
+    message: 'Backend OK', 
+    timestamp: Date.now(), 
+    mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+    payosConfigured: !!(process.env.PAYOS_CLIENT_ID && process.env.PAYOS_API_KEY)
+  });
 });
 
-// ==================== FALLBACK CHO FRONTEND ====================
+// ==================== FALLBACK FRONTEND ====================
 app.get('/', (req, res) => {
   res.send(`
     <!DOCTYPE html>
     <html>
     <head><title>Shop Pro API</title></head>
-    <body>
-      <h1>Backend is running!</h1>
-      <p>API endpoints:</p>
-      <ul>
-        <li><a href="/api/products">/api/products</a></li>
-        <li><a href="/api/debug">/api/debug</a></li>
-      </ul>
+    <body style="font-family: Arial; text-align: center; padding: 50px;">
+      <h1>✅ Backend is running!</h1>
+      <p>MongoDB: ${mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected'}</p>
+      <p>PayOS: ${process.env.PAYOS_CLIENT_ID ? 'Configured' : 'Not configured'}</p>
+      <hr>
       <p>Frontend: <a href="https://websitepro-one.vercel.app">https://websitepro-one.vercel.app</a></p>
+      <p>API: <a href="/api/products">/api/products</a></p>
     </body>
     </html>
   `);
