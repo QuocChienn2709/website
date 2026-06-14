@@ -1,4 +1,4 @@
-<!-- ==================== public/index.html ==================== -->
+<!-- ==================== public/index.html (GIAO DIỆN CHÍNH) ==================== -->
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -7,25 +7,20 @@
   <title>Shop Pro Account</title>
   <style>
     body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
-    .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 10px; }
     .product { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
     .hidden { display: none; }
     button { margin: 5px; padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; }
-    button:hover { background: #0056b3; }
     input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 3px; }
-    #balance { color: green; font-weight: bold; font-size: 1.2em; }
+    #balance { color: green; font-weight: bold; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
     th { background: #333; color: white; }
-    .nav { background: #333; color: white; padding: 10px; margin-bottom: 20px; border-radius: 5px; }
-    .nav button { background: #555; }
   </style>
 </head>
 <body>
 <div class="container">
-  <div class="nav">
-    <h2>🏪 Shop Pro Account</h2>
-  </div>
+  <h2>🏪 Shop Pro Account</h2>
 
   <div id="loginBox">
     <h3>🔐 Đăng nhập / Đăng ký</h3>
@@ -46,49 +41,28 @@
     <h3>🛒 Sản phẩm</h3>
     <div id="products"></div>
 
-    <div id="ordersSection" class="hidden">
-      <h3>📜 Lịch sử đơn hàng</h3>
-      <div id="orders"></div>
-      <button onclick="document.getElementById('ordersSection').classList.add('hidden')">Đóng</button>
-    </div>
-
-    <div id="purchasesSection" class="hidden">
-      <h3>🔑 Tài khoản đã mua</h3>
-      <div id="purchasesList"></div>
-      <button onclick="document.getElementById('purchasesSection').classList.add('hidden')">Đóng</button>
-    </div>
+    <div id="ordersSection" class="hidden"><h3>📜 Lịch sử đơn hàng</h3><div id="orders"></div><button onclick="document.getElementById('ordersSection').classList.add('hidden')">Đóng</button></div>
+    <div id="purchasesSection" class="hidden"><h3>🔑 Tài khoản đã mua</h3><div id="purchasesList"></div><button onclick="document.getElementById('purchasesSection').classList.add('hidden')">Đóng</button></div>
   </div>
 </div>
 
 <script>
-  let currentUserId = null;
-  let currentUsername = null;
+  let currentUserId = null, currentUsername = null;
+  const API_URL = '';
 
   async function doRegister() {
     const username = document.getElementById('loginUser').value;
     const password = document.getElementById('loginPass').value;
-    if (!username || !password) return alert('Nhập username và password');
-    const res = await fetch('/api/register', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
+    if (!username || !password) return alert('Nhập đầy đủ');
+    const res = await fetch(API_URL + '/api/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     const data = await res.json();
-    if (data.success) {
-      alert('Đăng ký thành công! Hãy đăng nhập.');
-    } else {
-      alert('Lỗi: ' + data.error);
-    }
+    alert(data.success ? 'Đăng ký thành công!' : 'Lỗi: ' + data.error);
   }
 
   async function doLogin() {
     const username = document.getElementById('loginUser').value;
     const password = document.getElementById('loginPass').value;
-    const res = await fetch('/api/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ username, password })
-    });
+    const res = await fetch(API_URL + '/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username, password }) });
     const data = await res.json();
     if (data.success) {
       currentUserId = data.userId;
@@ -98,98 +72,52 @@
       document.getElementById('username').innerText = currentUsername;
       document.getElementById('balance').innerText = data.balance.toLocaleString();
       loadProducts();
-    } else {
-      alert('Sai tài khoản hoặc mật khẩu');
-    }
+    } else alert('Sai tài khoản hoặc mật khẩu');
   }
 
-  function logout() {
-    currentUserId = null;
-    currentUsername = null;
-    document.getElementById('loginBox').style.display = 'block';
-    document.getElementById('app').classList.add('hidden');
-    document.getElementById('loginUser').value = '';
-    document.getElementById('loginPass').value = '';
-  }
+  function logout() { currentUserId = null; document.getElementById('loginBox').style.display = 'block'; document.getElementById('app').classList.add('hidden'); }
 
   async function loadProducts() {
-    const res = await fetch('/api/products');
+    const res = await fetch(API_URL + '/api/products');
     const products = await res.json();
     let html = '';
-    products.forEach(p => {
-      html += `<div class="product">
-        <strong>${p.name}</strong><br/>
-        Giá: ${p.price.toLocaleString()}đ<br/>
-        <button onclick="buyProduct('${p._id}')">Mua ngay</button>
-      </div>`;
-    });
+    products.forEach(p => { html += `<div class="product"><strong>${p.name}</strong><br/>Giá: ${p.price.toLocaleString()}đ<br/><button onclick="buyProduct('${p._id}')">Mua ngay</button></div>`; });
     document.getElementById('products').innerHTML = html;
   }
 
   async function buyProduct(productId) {
     if (!currentUserId) return alert('Chưa đăng nhập');
-    const res = await fetch('/api/create-order', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: currentUserId, productId })
-    });
+    const res = await fetch(API_URL + '/api/create-order', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId, productId }) });
     const data = await res.json();
-    if (data.checkoutUrl) {
-      window.location.href = data.checkoutUrl;
-    } else {
-      alert('Lỗi tạo đơn hàng: ' + data.error);
-    }
+    if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+    else alert('Lỗi: ' + data.error);
   }
 
-  function showDeposit() {
+  async function showDeposit() {
     const amount = prompt('Nhập số tiền muốn nạp (VND):', '100000');
-    if (amount && !isNaN(amount) && amount > 0) {
-      deposit(parseInt(amount));
-    }
-  }
-
-  async function deposit(amount) {
-    const res = await fetch('/api/deposit', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ userId: currentUserId, amount })
-    });
-    const data = await res.json();
-    if (data.checkoutUrl) {
-      window.location.href = data.checkoutUrl;
-    } else {
-      alert('Lỗi tạo đơn nạp tiền');
+    if (amount && amount > 0) {
+      const res = await fetch(API_URL + '/api/deposit', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId: currentUserId, amount: parseInt(amount) }) });
+      const data = await res.json();
+      if (data.checkoutUrl) window.location.href = data.checkoutUrl;
+      else alert('Lỗi: ' + data.error);
     }
   }
 
   async function loadOrders() {
-    const res = await fetch(`/api/my-orders/${currentUserId}`);
+    const res = await fetch(API_URL + `/api/my-orders/${currentUserId}`);
     const orders = await res.json();
-    let html = '<table><tr><th>Sản phẩm</th><th>Số tiền</th><th>Ngày</th><th>Trạng thái</th></tr>';
-    orders.forEach(o => {
-      html += `<tr>
-        <td>${o.productId ? o.productId.name : 'Nạp tiền'}</td>
-        <td>${o.amount.toLocaleString()}đ</td>
-        <td>${new Date(o.createdAt).toLocaleString()}</td>
-        <td>${o.status === 'completed' ? '✅ Thành công' : '⏳ Chờ'}</td>
-      </tr>`;
-    });
+    let html = '<table><tr><th>Sản phẩm</th><th>Số tiền</th><th>Ngày</th></tr>';
+    orders.forEach(o => { html += `<tr><td>${o.productId ? o.productId.name : 'Nạp tiền'}</td><td>${o.amount.toLocaleString()}đ</td><td>${new Date(o.createdAt).toLocaleString()}</td></tr>`; });
     html += '</table>';
     document.getElementById('orders').innerHTML = html;
     document.getElementById('ordersSection').classList.remove('hidden');
   }
 
   async function loadMyPurchases() {
-    const res = await fetch(`/api/my-purchases/${currentUserId}`);
+    const res = await fetch(API_URL + `/api/my-purchases/${currentUserId}`);
     const purchases = await res.json();
-    let html = '<table><tr><th>Sản phẩm</th><th>Tài khoản (user:pass)</th><th>Ngày mua</th></tr>';
-    purchases.forEach(p => {
-      html += `<tr>
-        <td>${p.productId.name}</td>
-        <td><code style="background:#f0f0f0;padding:3px;">${p.accountData}</code></td>
-        <td>${new Date(p.purchasedAt).toLocaleString()}</td>
-      </tr>`;
-    });
+    let html = '<table><tr><th>Sản phẩm</th><th>Tài khoản</th><th>Ngày mua</th></tr>';
+    purchases.forEach(p => { html += `<tr><td>${p.productId.name}</td><td><code>${p.accountData}</code></td><td>${new Date(p.purchasedAt).toLocaleString()}</td></tr>`; });
     html += '</table>';
     document.getElementById('purchasesList').innerHTML = html;
     document.getElementById('purchasesSection').classList.remove('hidden');
@@ -197,11 +125,9 @@
 
   async function refreshBalance() {
     if (currentUserId) {
-      const res = await fetch(`/api/user/${currentUserId}/balance`);
+      const res = await fetch(API_URL + `/api/user/${currentUserId}/balance`);
       const data = await res.json();
-      if (data.balance !== undefined) {
-        document.getElementById('balance').innerText = data.balance.toLocaleString();
-      }
+      if (data.balance !== undefined) document.getElementById('balance').innerText = data.balance.toLocaleString();
     }
   }
   setInterval(refreshBalance, 5000);
