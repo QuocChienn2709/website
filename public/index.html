@@ -1,0 +1,185 @@
+<!-- ==================== public/index.html (Trang chủ) ==================== -->
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shop Pro Account</title>
+  <style>
+    body { font-family: Arial; margin: 20px; }
+    .container { max-width: 800px; margin: auto; }
+    .product { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    .hidden { display: none; }
+    button { margin: 5px; padding: 8px 15px; cursor: pointer; }
+    #balance { color: green; font-weight: bold; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+  </style>
+</head>
+<body>
+<div class="container">
+  <h2>🔐 Đăng nhập / Đăng ký</h2>
+  <input type="text" id="loginUser" placeholder="Username" />
+  <input type="password" id="loginPass" placeholder="Password" />
+  <button onclick="doLogin()">Đăng nhập</button>
+  <button onclick="doRegister()">Đăng ký</button>
+
+  <div id="app" class="hidden">
+    <hr />
+    <h3>👋 Chào <span id="username"></span> | Số dư: <span id="balance">0</span>đ</h3>
+    <button onclick="showDeposit()">💰 Nạp tiền</button>
+    <button onclick="loadMyPurchases()">📦 Tài khoản đã mua</button>
+    <hr />
+
+    <h3>🛒 Sản phẩm</h3>
+    <div id="products"></div>
+
+    <h3>📜 Lịch sử đơn hàng</h3>
+    <div id="orders"></div>
+
+    <div id="purchases" class="hidden">
+      <h3>🔑 Tài khoản đã mua</h3>
+      <div id="purchasesList"></div>
+      <button onclick="document.getElementById('purchases').classList.add('hidden')">Đóng</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  let currentUserId = null;
+  let currentUsername = null;
+
+  async function doRegister() {
+    const username = document.getElementById('loginUser').value;
+    const password = document.getElementById('loginPass').value;
+    const res = await fetch('/api/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    if (data.success) {
+      alert('Đăng ký thành công! Hãy đăng nhập.');
+    } else {
+      alert('Lỗi: ' + data.error);
+    }
+  }
+
+  async function doLogin() {
+    const username = document.getElementById('loginUser').value;
+    const password = document.getElementById('loginPass').value;
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+    const data = await res.json();
+    if (data.success) {
+      currentUserId = data.userId;
+      currentUsername = data.username;
+      document.getElementById('app').classList.remove('hidden');
+      document.getElementById('username').innerText = currentUsername;
+      document.getElementById('balance').innerText = data.balance;
+      loadProducts();
+      loadOrders();
+    } else {
+      alert('Sai tài khoản hoặc mật khẩu');
+    }
+  }
+
+  async function loadProducts() {
+    const res = await fetch('/api/products');
+    const products = await res.json();
+    let html = '';
+    products.forEach(p => {
+      html += `<div class="product">
+        <strong>${p.name}</strong><br/>
+        Giá: ${p.price.toLocaleString()}đ<br/>
+        <button onclick="buyProduct('${p._id}')">Mua ngay</button>
+      </div>`;
+    });
+    document.getElementById('products').innerHTML = html;
+  }
+
+  async function buyProduct(productId) {
+    if (!currentUserId) return alert('Chưa đăng nhập');
+    const res = await fetch('/api/create-order', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: currentUserId, productId })
+    });
+    const data = await res.json();
+    if (data.checkoutUrl) {
+      window.location.href = data.checkoutUrl;
+    } else {
+      alert('Lỗi tạo đơn hàng');
+    }
+  }
+
+  function showDeposit() {
+    const amount = prompt('Nhập số tiền muốn nạp (VND):', '100000');
+    if (amount && !isNaN(amount) && amount > 0) {
+      deposit(parseInt(amount));
+    }
+  }
+
+  async function deposit(amount) {
+    const res = await fetch('/api/deposit', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userId: currentUserId, amount })
+    });
+    const data = await res.json();
+    if (data.checkoutUrl) {
+      window.location.href = data.checkoutUrl;
+    } else {
+      alert('Lỗi tạo đơn nạp tiền');
+    }
+  }
+
+  async function loadOrders() {
+    const res = await fetch(`/api/my-orders/${currentUserId}`);
+    const orders = await res.json();
+    let html = '<table><tr><th>Sản phẩm</th><th>Số tiền</th><th>Ngày</th><th>Trạng thái</th></tr>';
+    orders.forEach(o => {
+      html += `<tr>
+        <td>${o.productId ? o.productId.name : 'Nạp tiền'}</td>
+        <td>${o.amount.toLocaleString()}đ</td>
+        <td>${new Date(o.createdAt).toLocaleString()}</td>
+        <td>${o.status === 'completed' ? '✅ Thành công' : '⏳ Chờ'}</td>
+      </tr>`;
+    });
+    html += '</table>';
+    document.getElementById('orders').innerHTML = html;
+  }
+
+  async function loadMyPurchases() {
+    const res = await fetch(`/api/my-purchases/${currentUserId}`);
+    const purchases = await res.json();
+    let html = '<table><tr><th>Sản phẩm</th><th>Tài khoản (user:pass)</th><th>Ngày mua</th></tr>';
+    purchases.forEach(p => {
+      html += `<tr>
+        <td>${p.productId.name}</td>
+        <td><code>${p.accountData}</code></td>
+        <td>${new Date(p.purchasedAt).toLocaleString()}</td>
+      </tr>`;
+    });
+    html += '</table>';
+    document.getElementById('purchasesList').innerHTML = html;
+    document.getElementById('purchases').classList.remove('hidden');
+  }
+
+  // Refresh balance định kỳ
+  setInterval(async () => {
+    if (currentUserId) {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: currentUsername, password: 'dummy' })
+      });
+      // Cách tốt hơn: có API riêng /api/balance
+    }
+  }, 10000);
+</script>
+</body>
+</html>

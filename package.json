@@ -1,0 +1,14 @@
+// ==================== package.json ====================
+{
+  "name": "shop-pro-account",
+  "version": "1.0.0",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "mongoose": "^7.5.0",
+    "cors": "^2.8.5",
+    "axios": "^1.5.0"
+  }
+}
