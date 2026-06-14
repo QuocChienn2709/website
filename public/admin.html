@@ -1,50 +1,63 @@
-<!-- ==================== public/admin.html (Trang quản trị) ==================== -->
+<!-- ==================== public/admin.html ==================== -->
 <!DOCTYPE html>
 <html lang="vi">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Admin - Quản lý Shop Pro</title>
+  <title>Admin Dashboard</title>
   <style>
-    body { font-family: Arial; margin: 20px; background: #f0f0f0; }
-    .container { max-width: 1200px; margin: auto; background: white; padding: 20px; border-radius: 8px; }
+    body { font-family: Arial; margin: 0; padding: 20px; background: #f0f0f0; }
+    .container { max-width: 1400px; margin: auto; background: white; padding: 20px; border-radius: 8px; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
     th { background: #333; color: white; }
-    .section { margin-bottom: 40px; }
-    button { padding: 5px 10px; cursor: pointer; }
-    input, select { padding: 5px; margin: 5px; }
+    .section { margin-bottom: 40px; padding: 15px; background: #fafafa; border-radius: 5px; }
+    button { padding: 5px 10px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; }
+    button:hover { background: #0056b3; }
+    input, select { padding: 5px; margin: 5px; border: 1px solid #ddd; border-radius: 3px; }
+    .delete-btn { background: #dc3545; }
+    .delete-btn:hover { background: #c82333; }
+    h2 { color: #333; }
   </style>
 </head>
 <body>
 <div class="container">
-  <h1>👑 Admin Dashboard - Quản lý Shop</h1>
+  <h1>👑 Admin Dashboard</h1>
 
   <div class="section">
     <h2>📦 Đơn hàng</h2>
-    <button onclick="loadOrders()">Tải lại</button>
-    <table id="ordersTable">
-      <tr><th>Mã đơn</th><th>Người dùng</th><th>Sản phẩm</th><th>Số tiền</th><th>Loại</th><th>Trạng thái</th><th>Ngày tạo</th><th>Thao tác</th></tr>
-    </table>
+    <button onclick="loadOrders()">🔄 Tải lại</button>
+    <div style="overflow-x: auto;">
+      <table id="ordersTable">
+        <thead><tr><th>Mã đơn</th><th>Người dùng</th><th>Sản phẩm</th><th>Số tiền</th><th>Loại</th><th>Trạng thái</th><th>Ngày tạo</th><th>Thao tác</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="section">
-    <h2>🛍️ Quản lý sản phẩm</h2>
-    <h3>Thêm sản phẩm mới</h3>
+    <h2>🛍️ Sản phẩm</h2>
+    <h3>Thêm mới</h3>
     <input type="text" id="prodName" placeholder="Tên sản phẩm" />
     <input type="number" id="prodPrice" placeholder="Giá" />
-    <input type="text" id="prodAccount" placeholder="Tài khoản (user:pass)" style="width: 200px;" />
-    <button onclick="addProduct()">Thêm sản phẩm</button>
-    <table id="productsTable">
-      <tr><th>ID</th><th>Tên</th><th>Giá</th><th>Tài khoản</th><th>Thao tác</th></tr>
-    </table>
+    <input type="text" id="prodAccount" placeholder="user:pass" style="width: 200px;" />
+    <button onclick="addProduct()">➕ Thêm</button>
+    <div style="overflow-x: auto; margin-top: 20px;">
+      <table id="productsTable">
+        <thead><tr><th>ID</th><th>Tên</th><th>Giá</th><th>Tài khoản</th><th>Thao tác</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 
   <div class="section">
-    <h2>👤 Quản lý người dùng</h2>
-    <table id="usersTable">
-      <tr><th>ID</th><th>Username</th><th>Số dư</th><th>Cộng tiền</th></tr>
-    </table>
+    <h2>👤 Người dùng</h2>
+    <div style="overflow-x: auto;">
+      <table id="usersTable">
+        <thead><tr><th>ID</th><th>Username</th><th>Số dư</th><th>Cộng tiền</th><th>Xóa</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -52,24 +65,24 @@
   async function loadOrders() {
     const res = await fetch('/api/admin/orders');
     const orders = await res.json();
-    let html = '<tr><th>Mã đơn</th><th>Người dùng</th><th>Sản phẩm</th><th>Số tiền</th><th>Loại</th><th>Trạng thái</th><th>Ngày tạo</th><th>Thao tác</th></tr>';
+    let html = '';
     orders.forEach(o => {
       html += `<tr>
-        <td>${o.orderCode}</td>
+        <td><code>${o.orderCode}</code></td>
         <td>${o.userId?.username || 'N/A'}</td>
-        <td>${o.productId?.name || (o.type === 'deposit' ? 'Nạp tiền' : 'N/A')}</td>
+        <td>${o.productId?.name || (o.type === 'deposit' ? '💰 Nạp tiền' : 'N/A')}</td>
         <td>${o.amount.toLocaleString()}đ</td>
         <td>${o.type === 'purchase' ? 'Mua hàng' : 'Nạp tiền'}</td>
         <td style="color:${o.status === 'completed' ? 'green' : 'orange'}">${o.status}</td>
         <td>${new Date(o.createdAt).toLocaleString()}</td>
-        <td><button onclick="updateOrderStatus('${o._id}')">Cập nhật</button></td>
+        <td><button onclick="updateOrderStatus('${o._id}')">✏️ Sửa</button></td>
       </tr>`;
     });
-    document.getElementById('ordersTable').innerHTML = html;
+    document.querySelector('#ordersTable tbody').innerHTML = html;
   }
 
   async function updateOrderStatus(orderId) {
-    const newStatus = prompt('Nhập trạng thái mới (pending/completed/failed):', 'completed');
+    const newStatus = prompt('Nhập trạng thái (pending/completed/failed):', 'completed');
     if (newStatus) {
       await fetch(`/api/admin/orders/${orderId}/status`, {
         method: 'PUT',
@@ -83,17 +96,17 @@
   async function loadProducts() {
     const res = await fetch('/api/products');
     const products = await res.json();
-    let html = '<tr><th>ID</th><th>Tên</th><th>Giá</th><th>Tài khoản</th><th>Xóa</th></tr>';
+    let html = '';
     products.forEach(p => {
       html += `<tr>
-        <td>${p._id}</td>
+        <td><code>${p._id}</code></td>
         <td>${p.name}</td>
         <td>${p.price.toLocaleString()}đ</td>
         <td><code>${p.accountData}</code></td>
-        <td><button onclick="deleteProduct('${p._id}')">🗑️ Xóa</button></td>
+        <td><button onclick="editProduct('${p._id}')">✏️ Sửa</button> <button class="delete-btn" onclick="deleteProduct('${p._id}')">🗑️ Xóa</button></td>
       </tr>`;
     });
-    document.getElementById('productsTable').innerHTML = html;
+    document.querySelector('#productsTable tbody').innerHTML = html;
   }
 
   async function addProduct() {
@@ -113,6 +126,20 @@
     document.getElementById('prodAccount').value = '';
   }
 
+  async function editProduct(productId) {
+    const newName = prompt('Tên mới:');
+    const newPrice = parseInt(prompt('Giá mới:'));
+    const newAccount = prompt('Tài khoản mới (user:pass):');
+    if (newName && newPrice && newAccount) {
+      await fetch(`/api/admin/products/${productId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newName, price: newPrice, accountData: newAccount })
+      });
+      loadProducts();
+    }
+  }
+
   async function deleteProduct(productId) {
     if (confirm('Xóa sản phẩm này?')) {
       await fetch(`/api/admin/products/${productId}`, { method: 'DELETE' });
@@ -123,21 +150,22 @@
   async function loadUsers() {
     const res = await fetch('/api/admin/users');
     const users = await res.json();
-    let html = '<tr><th>ID</th><th>Username</th><th>Số dư</th><th>Cộng tiền</th></tr>';
+    let html = '';
     users.forEach(u => {
       html += `<tr>
-        <td>${u._id}</td>
+        <td><code>${u._id}</code></td>
         <td>${u.username}</td>
-        <td>${u.balance.toLocaleString()}đ</td>
-        <td><input type="number" id="amount_${u._id}" placeholder="Số tiền" /> <button onclick="addBalance('${u._id}')">+</button></td>
+        <td><strong>${u.balance.toLocaleString()}đ</strong></td>
+        <td><input type="number" id="amount_${u._id}" placeholder="Số tiền" style="width:100px;" /> <button onclick="addBalance('${u._id}')">➕ Cộng</button></td>
+        <td><button class="delete-btn" onclick="deleteUser('${u._id}')">🗑️ Xóa</button></td>
       </tr>`;
     });
-    document.getElementById('usersTable').innerHTML = html;
+    document.querySelector('#usersTable tbody').innerHTML = html;
   }
 
   async function addBalance(userId) {
     const amount = parseInt(document.getElementById(`amount_${userId}`).value);
-    if (!amount) return;
+    if (!amount) return alert('Nhập số tiền');
     await fetch(`/api/admin/users/${userId}/balance`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -147,7 +175,13 @@
     loadUsers();
   }
 
-  // Tải dữ liệu ban đầu
+  async function deleteUser(userId) {
+    if (confirm('Xóa người dùng này? Toàn bộ đơn hàng và lịch sử mua sẽ bị xóa.')) {
+      await fetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+      loadUsers();
+    }
+  }
+
   loadOrders();
   loadProducts();
   loadUsers();
