@@ -1,4 +1,4 @@
-// ==================== backend/server.js (SỬA LỖI KẾT NỐI MONGODB) ====================
+// ==================== backend/server.js (SỬA KẾT NỐI MONGODB - BỎ SRV) ====================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -9,37 +9,53 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// ==================== FIX: THÊM OPTIONS CHO MONGODB CONNECTION ====================
+// ==================== FIX: SỬ DỤNG STANDARD CONNECTION STRING (KHÔNG SRV) ====================
+// Nếu MONGO_URL có dạng mongodb+srv:// -> tự động chuyển sang standard TCP
+const fixMongoUrl = (url) => {
+  if (url && url.includes('mongodb+srv://')) {
+    // Chuyển đổi từ SRV sang standard connection string
+    const withoutSrv = url.replace('mongodb+srv://', 'mongodb://');
+    // Thêm option directConnection=true để bỏ qua DNS SRV
+    const separator = withoutSrv.includes('?') ? '&' : '?';
+    return `${withoutSrv}${separator}directConnection=true&tls=true`;
+  }
+  return url;
+};
+
+const mongoUrl = process.env.MONGO_URL;
+if (!mongoUrl) {
+  console.error('ERROR: MONGO_URL is not defined');
+  process.exit(1);
+}
+
+const fixedUrl = fixMongoUrl(mongoUrl);
+console.log('Using MongoDB connection (fixed if needed)');
+
 const mongoOptions = {
   useNewUrlParser: true,
   useUnifiedTopology: true,
-  serverSelectionTimeoutMS: 5000,
+  serverSelectionTimeoutMS: 10000,
   socketTimeoutMS: 45000,
-  family: 4 // Force IPv4, tránh lỗi DNS
+  connectTimeoutMS: 10000,
+  family: 4 // Force IPv4
 };
 
-// KẾT NỐI MONGODB VỚI LOG CHI TIẾT
+// KẾT NỐI MONGODB
 const connectDB = async () => {
   try {
-    const mongoUrl = process.env.MONGO_URL;
-    if (!mongoUrl) {
-      console.error('ERROR: MONGO_URL is not defined in environment variables');
-      process.exit(1);
-    }
     console.log('Connecting to MongoDB...');
-    await mongoose.connect(mongoUrl, mongoOptions);
+    await mongoose.connect(fixedUrl, mongoOptions);
     console.log('MongoDB connected successfully');
   } catch (err) {
     console.error('MongoDB connection error:', err.message);
-    console.error('Please check your MONGO_URL in Render environment variables');
-    console.error('Expected format: mongodb+srv://username:password@cluster.mongodb.net/database_name');
-    process.exit(1);
+    console.log('Retrying in 5 seconds...');
+    setTimeout(connectDB, 5000);
   }
 };
 
 connectDB();
 
-// ==================== SCHEMAS (giữ nguyên) ====================
+// ==================== SCHEMAS ====================
 const UserSchema = new mongoose.Schema({
   username: { type: String, unique: true, required: true },
   password: { type: String, required: true },
@@ -244,7 +260,7 @@ app.post('/api/webhook', async (req, res) => {
       return res.status(400).json({ error: 'Invalid signature' });
     }
     
-    const { orderCode, status, amount } = webhookBody;
+    const { orderCode, status } = webhookBody;
     
     if (status === 'PAID') {
       let foundOrder = await Order.findOne({ payosOrderCode: orderCode });
@@ -411,14 +427,13 @@ const initData = async () => {
   }
 };
 
-// Đợi kết nối MongoDB xong mới init data
 mongoose.connection.once('open', () => {
   console.log('MongoDB ready, initializing data...');
   initData();
 });
 
 app.get('/api/debug', (req, res) => {
-  res.json({ message: 'Backend is running with PayOS Checksum', timestamp: Date.now() });
+  res.json({ message: 'Backend is running', timestamp: Date.now() });
 });
 
 const PORT = process.env.PORT || 3000;
