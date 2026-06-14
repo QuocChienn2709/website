@@ -1,4 +1,4 @@
-<!-- ==================== public/index.html (Trang chủ) ==================== -->
+<!-- ==================== public/index.html ==================== -->
 <!DOCTYPE html>
 <html lang="vi">
 <head>
@@ -6,41 +6,56 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Shop Pro Account</title>
   <style>
-    body { font-family: Arial; margin: 20px; }
-    .container { max-width: 800px; margin: auto; }
-    .product { border: 1px solid #ccc; padding: 10px; margin: 10px 0; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 20px; background: #f5f5f5; }
+    .container { max-width: 1000px; margin: auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.1); }
+    .product { border: 1px solid #ddd; padding: 15px; margin: 10px 0; border-radius: 5px; }
     .hidden { display: none; }
-    button { margin: 5px; padding: 8px 15px; cursor: pointer; }
-    #balance { color: green; font-weight: bold; }
+    button { margin: 5px; padding: 8px 15px; cursor: pointer; background: #007bff; color: white; border: none; border-radius: 3px; }
+    button:hover { background: #0056b3; }
+    input { padding: 8px; margin: 5px; border: 1px solid #ddd; border-radius: 3px; }
+    #balance { color: green; font-weight: bold; font-size: 1.2em; }
     table { width: 100%; border-collapse: collapse; margin-top: 20px; }
     th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background: #333; color: white; }
+    .nav { background: #333; color: white; padding: 10px; margin-bottom: 20px; border-radius: 5px; }
+    .nav button { background: #555; }
   </style>
 </head>
 <body>
 <div class="container">
-  <h2>🔐 Đăng nhập / Đăng ký</h2>
-  <input type="text" id="loginUser" placeholder="Username" />
-  <input type="password" id="loginPass" placeholder="Password" />
-  <button onclick="doLogin()">Đăng nhập</button>
-  <button onclick="doRegister()">Đăng ký</button>
+  <div class="nav">
+    <h2>🏪 Shop Pro Account</h2>
+  </div>
+
+  <div id="loginBox">
+    <h3>🔐 Đăng nhập / Đăng ký</h3>
+    <input type="text" id="loginUser" placeholder="Username" />
+    <input type="password" id="loginPass" placeholder="Password" />
+    <button onclick="doLogin()">Đăng nhập</button>
+    <button onclick="doRegister()">Đăng ký</button>
+  </div>
 
   <div id="app" class="hidden">
-    <hr />
     <h3>👋 Chào <span id="username"></span> | Số dư: <span id="balance">0</span>đ</h3>
     <button onclick="showDeposit()">💰 Nạp tiền</button>
     <button onclick="loadMyPurchases()">📦 Tài khoản đã mua</button>
+    <button onclick="loadOrders()">📜 Lịch sử đơn hàng</button>
+    <button onclick="logout()">🚪 Đăng xuất</button>
     <hr />
 
     <h3>🛒 Sản phẩm</h3>
     <div id="products"></div>
 
-    <h3>📜 Lịch sử đơn hàng</h3>
-    <div id="orders"></div>
+    <div id="ordersSection" class="hidden">
+      <h3>📜 Lịch sử đơn hàng</h3>
+      <div id="orders"></div>
+      <button onclick="document.getElementById('ordersSection').classList.add('hidden')">Đóng</button>
+    </div>
 
-    <div id="purchases" class="hidden">
+    <div id="purchasesSection" class="hidden">
       <h3>🔑 Tài khoản đã mua</h3>
       <div id="purchasesList"></div>
-      <button onclick="document.getElementById('purchases').classList.add('hidden')">Đóng</button>
+      <button onclick="document.getElementById('purchasesSection').classList.add('hidden')">Đóng</button>
     </div>
   </div>
 </div>
@@ -52,6 +67,7 @@
   async function doRegister() {
     const username = document.getElementById('loginUser').value;
     const password = document.getElementById('loginPass').value;
+    if (!username || !password) return alert('Nhập username và password');
     const res = await fetch('/api/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -77,14 +93,23 @@
     if (data.success) {
       currentUserId = data.userId;
       currentUsername = data.username;
+      document.getElementById('loginBox').style.display = 'none';
       document.getElementById('app').classList.remove('hidden');
       document.getElementById('username').innerText = currentUsername;
-      document.getElementById('balance').innerText = data.balance;
+      document.getElementById('balance').innerText = data.balance.toLocaleString();
       loadProducts();
-      loadOrders();
     } else {
       alert('Sai tài khoản hoặc mật khẩu');
     }
+  }
+
+  function logout() {
+    currentUserId = null;
+    currentUsername = null;
+    document.getElementById('loginBox').style.display = 'block';
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('loginUser').value = '';
+    document.getElementById('loginPass').value = '';
   }
 
   async function loadProducts() {
@@ -112,7 +137,7 @@
     if (data.checkoutUrl) {
       window.location.href = data.checkoutUrl;
     } else {
-      alert('Lỗi tạo đơn hàng');
+      alert('Lỗi tạo đơn hàng: ' + data.error);
     }
   }
 
@@ -151,6 +176,7 @@
     });
     html += '</table>';
     document.getElementById('orders').innerHTML = html;
+    document.getElementById('ordersSection').classList.remove('hidden');
   }
 
   async function loadMyPurchases() {
@@ -160,26 +186,25 @@
     purchases.forEach(p => {
       html += `<tr>
         <td>${p.productId.name}</td>
-        <td><code>${p.accountData}</code></td>
+        <td><code style="background:#f0f0f0;padding:3px;">${p.accountData}</code></td>
         <td>${new Date(p.purchasedAt).toLocaleString()}</td>
       </tr>`;
     });
     html += '</table>';
     document.getElementById('purchasesList').innerHTML = html;
-    document.getElementById('purchases').classList.remove('hidden');
+    document.getElementById('purchasesSection').classList.remove('hidden');
   }
 
-  // Refresh balance định kỳ
-  setInterval(async () => {
+  async function refreshBalance() {
     if (currentUserId) {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: currentUsername, password: 'dummy' })
-      });
-      // Cách tốt hơn: có API riêng /api/balance
+      const res = await fetch(`/api/user/${currentUserId}/balance`);
+      const data = await res.json();
+      if (data.balance !== undefined) {
+        document.getElementById('balance').innerText = data.balance.toLocaleString();
+      }
     }
-  }, 10000);
+  }
+  setInterval(refreshBalance, 5000);
 </script>
 </body>
 </html>
