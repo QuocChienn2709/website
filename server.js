@@ -1,4 +1,4 @@
-// ==================== server.js (chạy trên Render) ====================
+// ==================== server.js (có xử lý Checksum) ====================
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -35,6 +35,7 @@ const OrderSchema = new mongoose.Schema({
   status: { type: String, default: 'pending' },
   type: { type: String, default: 'purchase' },
   payosLink: { type: String, default: '' },
+  payosOrderCode: { type: Number, default: 0 },
   createdAt: { type: Date, default: Date.now }
 });
 const Order = mongoose.model('Order', OrderSchema);
@@ -46,6 +47,20 @@ const PurchaseSchema = new mongoose.Schema({
   purchasedAt: { type: Date, default: Date.now }
 });
 const Purchase = mongoose.model('Purchase', PurchaseSchema);
+
+// ==================== HÀM TẠO CHECKSUM PAYOS ====================
+function createPayOSChecksum(data, apiKey) {
+  const sortedKeys = Object.keys(data).sort();
+  const signString = sortedKeys.map(key => `${key}=${data[key]}`).join('&');
+  return crypto.createHmac('sha256', apiKey).update(signString).digest('hex');
+}
+
+function verifyPayOSWebhook(body, signature, checksumKey) {
+  const sortedKeys = Object.keys(body).sort();
+  const signString = sortedKeys.map(key => `${key}=${body[key]}`).join('&');
+  const expectedSignature = crypto.createHmac('sha256', checksumKey).update(signString).digest('hex');
+  return signature === expectedSignature;
+}
 
 // ==================== API AUTH ====================
 app.post('/api/register', async (req, res) => {
@@ -92,7 +107,7 @@ app.get('/api/products', async (req, res) => {
   }
 });
 
-// ==================== API TẠO ĐƠN MUA HÀNG ====================
+// ==================== API TẠO ĐƠN MUA HÀNG (CÓ CHECKSUM) ====================
 app.post('/api/create-order', async (req, res) => {
   try {
     const { userId, productId } = req.body;
@@ -101,28 +116,35 @@ app.post('/api/create-order', async (req, res) => {
     const product = await Product.findById(productId);
     if (!product) return res.status(404).json({ error: 'Product not found' });
 
-    const orderCode = `ORD${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const orderCodeStr = `ORD${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const payosOrderCode = parseInt(Date.now().toString().slice(-9) + Math.floor(Math.random() * 1000));
+    
     const order = new Order({
-      orderCode,
+      orderCode: orderCodeStr,
       userId,
       productId,
       amount: product.price,
-      type: 'purchase'
+      type: 'purchase',
+      payosOrderCode: payosOrderCode
     });
     await order.save();
 
     const payosPayload = {
-      orderCode: parseInt(Date.now().toString().slice(-10) + Math.floor(Math.random() * 1000)),
+      orderCode: payosOrderCode,
       amount: product.price,
-      description: `Mua ${product.name}`,
+      description: `Mua ${product.name.substring(0, 25)}`,
       returnUrl: `${process.env.FRONTEND_URL}/success.html`,
       cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
     };
 
+    // Tạo checksum cho request gửi PayOS
+    const checksum = createPayOSChecksum(payosPayload, process.env.PAYOS_CHECKSUM_KEY);
+    
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
       headers: {
         'x-client-id': process.env.PAYOS_CLIENT_ID,
         'x-api-key': process.env.PAYOS_API_KEY,
+        'x-checksum-key': process.env.PAYOS_CHECKSUM_KEY,
         'Content-Type': 'application/json'
       }
     });
@@ -139,34 +161,40 @@ app.post('/api/create-order', async (req, res) => {
   }
 });
 
-// ==================== API NẠP TIỀN ====================
+// ==================== API NẠP TIỀN (CÓ CHECKSUM) ====================
 app.post('/api/deposit', async (req, res) => {
   try {
     const { userId, amount } = req.body;
     if (!userId || !amount || amount <= 0) return res.status(400).json({ error: 'Invalid data' });
 
-    const orderCode = `DEP${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const orderCodeStr = `DEP${Date.now()}${Math.floor(Math.random() * 10000)}`;
+    const payosOrderCode = parseInt(Date.now().toString().slice(-9) + Math.floor(Math.random() * 1000));
+    
     const order = new Order({
-      orderCode,
+      orderCode: orderCodeStr,
       userId,
       amount: amount,
       type: 'deposit',
-      productId: null
+      productId: null,
+      payosOrderCode: payosOrderCode
     });
     await order.save();
 
     const payosPayload = {
-      orderCode: parseInt(Date.now().toString().slice(-10) + Math.floor(Math.random() * 1000)),
+      orderCode: payosOrderCode,
       amount: amount,
       description: `Nap tien ${amount} VND`,
       returnUrl: `${process.env.FRONTEND_URL}/success.html`,
       cancelUrl: `${process.env.FRONTEND_URL}/cancel.html`
     };
 
+    const checksum = createPayOSChecksum(payosPayload, process.env.PAYOS_CHECKSUM_KEY);
+    
     const payosRes = await axios.post('https://api.payos.vn/v1/payment-requests', payosPayload, {
       headers: {
         'x-client-id': process.env.PAYOS_CLIENT_ID,
         'x-api-key': process.env.PAYOS_API_KEY,
+        'x-checksum-key': process.env.PAYOS_CHECKSUM_KEY,
         'Content-Type': 'application/json'
       }
     });
@@ -183,16 +211,24 @@ app.post('/api/deposit', async (req, res) => {
   }
 });
 
-// ==================== WEBHOOK PAYOS ====================
+// ==================== WEBHOOK PAYOS (CÓ XÁC MINH CHECKSUM) ====================
 app.post('/api/webhook', async (req, res) => {
   try {
-    const { orderCode, status, amount, transactionId } = req.body;
+    const signature = req.headers['x-signature'] || req.headers['x-checksum'];
+    const webhookBody = req.body;
+    
+    // Xác minh checksum
+    if (!verifyPayOSWebhook(webhookBody, signature, process.env.PAYOS_CHECKSUM_KEY)) {
+      console.error('Invalid webhook signature');
+      return res.status(400).json({ error: 'Invalid signature' });
+    }
+    
+    const { orderCode, status, amount, transactionId } = webhookBody;
     
     if (status === 'PAID') {
-      let foundOrder = null;
-      foundOrder = await Order.findOne({ orderCode: { $regex: `.*${orderCode}.*` } });
+      let foundOrder = await Order.findOne({ payosOrderCode: orderCode });
       if (!foundOrder) {
-        foundOrder = await Order.findOne({ 'payosLink': { $regex: `.*${orderCode}.*` } });
+        foundOrder = await Order.findOne({ orderCode: { $regex: `.*${orderCode}.*` } });
       }
       
       if (foundOrder && foundOrder.status === 'pending') {
@@ -352,7 +388,7 @@ const initData = async () => {
 initData();
 
 app.get('/api/debug', (req, res) => {
-  res.json({ message: 'Backend is running', timestamp: Date.now() });
+  res.json({ message: 'Backend is running with PayOS Checksum', timestamp: Date.now() });
 });
 
 const PORT = process.env.PORT || 3000;
