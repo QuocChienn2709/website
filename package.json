@@ -1,6 +1,6 @@
-// ==================== package.json ====================
+// ==================== package.json (backend) ====================
 {
-  "name": "shop-pro-account",
+  "name": "shop-pro-backend",
   "version": "1.0.0",
   "scripts": {
     "start": "node server.js"
